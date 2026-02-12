@@ -27,7 +27,7 @@ async function getLatestCode() {
             host: 'imap.gmail.com',
             port: 993,
             tls: true,
-            tlsOptions: { rejectUnauthorized: false }, // FIX: Bypasses self-signed cert error on Render
+            tlsOptions: { rejectUnauthorized: false }, // FIX: Bypasses certificate errors on Render
             authTimeout: 15000
         }
     };
@@ -55,7 +55,6 @@ async function getLatestCode() {
                     const idHeader = "Imap-Id: "+id+"\r\n";
                     const parsed = await simpleParser(idHeader + all.body);
 
-                    // Robust parsing to avoid TypeError on 'text'
                     const fromEmail = parsed.from?.text || "Unknown Sender";
                     const subjectLine = parsed.subject || "No Subject";
 
@@ -152,8 +151,18 @@ async function runBot() {
 
         if (capturedToken) {
             console.log("🚀 Syncing token with Supabase...");
-            await axios.post(CONFIG.supabaseUrl, { access_token: capturedToken });
-            return "Success: Token Updated";
+            try {
+                // Send token to Supabase Edge Function
+                const response = await axios.post(CONFIG.supabaseUrl, 
+                    { access_token: capturedToken }, 
+                    { headers: { 'Content-Type': 'application/json' } }
+                );
+                console.log("✅ SUPABASE SUCCESS:", response.data);
+                return "Success: Token Updated";
+            } catch (syncError) {
+                console.error("❌ Supabase Sync Failed:", syncError.response?.data || syncError.message);
+                throw new Error(`Sync Error: ${syncError.response?.status || 'Unknown'}`);
+            }
         } else {
             throw new Error("No token captured after 2FA submission.");
         }
