@@ -27,9 +27,12 @@ async function getLatestCode() {
             host: 'imap.gmail.com',
             port: 993,
             tls: true,
+            // 🟢 ADD THIS LINE TO FIX THE CERTIFICATE ERROR:
+            tlsOptions: { rejectUnauthorized: false }, 
             authTimeout: 10000
         }
     };
+    // ... rest of the function remains the same
 
     console.log("📧 Connecting to Gmail...");
     try {
@@ -186,3 +189,4 @@ app.get('/', (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`🚀 Listening on port ${PORT}`));
+
