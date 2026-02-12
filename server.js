@@ -7,6 +7,7 @@ const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+// 1. Configuration
 const CONFIG = {
     email: process.env.SARVINARCK_EMAIL,
     password: process.env.SARVINARCK_PASSWORD,
@@ -15,6 +16,7 @@ const CONFIG = {
     supabaseUrl: process.env.SUPABASE_FUNCTION_URL
 };
 
+// 2. Helper: Fetch 2FA Code from Gmail
 async function getLatestCode() {
     const imapConfig = {
         imap: {
@@ -39,7 +41,7 @@ async function getLatestCode() {
 
         console.log("🔎 Scanning for recent 2FA emails...");
 
-        for (let i = 0; i < 12; i++) {
+        for (let i = 0; i < 12; i++) { // Try for 60 seconds (12 * 5s)
             const messages = await connection.search(searchCriteria, fetchOptions);
             if (messages.length > 0) {
                 const recentMessages = messages.slice(-3).reverse(); 
@@ -67,6 +69,7 @@ async function getLatestCode() {
     }
 }
 
+// 3. Main Bot Logic
 async function runBot() {
     console.log("🤖 Bot starting...");
     const browser = await puppeteer.launch({
@@ -98,12 +101,12 @@ async function runBot() {
         await page.type('input[name="code"]', code, { delay: 100 });
         await page.keyboard.press('Enter');
 
-        // 🟢 NEW LOGIC: Polling for the Cookie
-        console.log("⏳ Login submitted. Polling specifically for 'apiToken' cookie...");
+        // 🟢 COOKIE POLLING LOOP
+        console.log("⏳ Login submitted. Polling for 'apiToken' cookie...");
         
         // Wait until we leave the sign-in page
         await page.waitForFunction(() => !window.location.href.includes('sign-in'), { timeout: 60000 });
-        console.log("⏳ Dashboard URL detected. checking cookies loop...");
+        console.log("⏳ Dashboard URL detected. Entering polling loop...");
 
         let foundToken = null;
         let attempts = 0;
@@ -111,7 +114,6 @@ async function runBot() {
 
         while (!foundToken && attempts < maxAttempts) {
             attempts++;
-            // Get all cookies for the current URL
             const cookies = await page.cookies();
             const targetCookie = cookies.find(c => c.name === 'apiToken');
 
@@ -119,9 +121,7 @@ async function runBot() {
                 foundToken = targetCookie.value;
                 console.log(`🔥 FOUND 'apiToken' on attempt ${attempts}:`, foundToken.substring(0, 15) + "...");
             } else {
-                console.log(`... attempt ${attempts}/${maxAttempts}: apiToken not yet present. Waiting 2s...`);
-                // Log what IS there to help debug if it fails
-                // console.log("   (Present cookies: " + cookies.map(c => c.name).join(', ') + ")");
+                console.log(`... attempt ${attempts}/${maxAttempts}: apiToken not found yet. Waiting 2s...`);
                 await new Promise(r => setTimeout(r, 2000));
             }
         }
@@ -134,10 +134,9 @@ async function runBot() {
             );
             return "Success: Token Updated";
         } else {
-            // Final check of what WAS there
             const cookies = await page.cookies();
             const names = cookies.map(c => c.name).join(', ');
-            throw new Error(`Timed out waiting for apiToken. Final cookies visible: ${names}`);
+            throw new Error(`Timed out waiting for apiToken. Cookies visible: ${names}`);
         }
 
     } catch (error) {
@@ -149,10 +148,25 @@ async function runBot() {
     }
 }
 
-app.get('/refresh', async (req, res) => {
-    const result = await runBot();
-    res.send({ status: result });
+// 4. Server Routes
+// 🟢 FAST RESPONSE: Prevents Cron Job Timeout
+app.get('/refresh', (req, res) => {
+    console.log("🚀 Cron Job Triggered! Sending immediate 'OK' response...");
+
+    // Start bot in background (no await)
+    runBot().then(result => {
+        console.log("🏁 Background Bot Finished:", result);
+    }).catch(err => {
+        console.error("💥 Background Bot Failed:", err);
+    });
+
+    // Respond immediately
+    res.send({ 
+        status: "Bot started in background. Check Render logs for results.", 
+        timestamp: new Date().toISOString() 
+    });
 });
 
-app.get('/', (req, res) => res.send("Bot Active. Use /refresh"));
+app.get('/', (req, res) => res.send("Bot Active. Use /refresh to trigger."));
+
 app.listen(PORT, () => console.log(`🚀 Listening on port ${PORT}`));
