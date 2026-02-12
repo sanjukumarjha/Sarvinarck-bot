@@ -98,37 +98,46 @@ async function runBot() {
         await page.type('input[name="code"]', code, { delay: 100 });
         await page.keyboard.press('Enter');
 
-        // 🟢 WAIT FOR DASHBOARD COOKIES
-        // This is the new part that replaces the "Polling" logic
-        console.log("⏳ Login submitted. Waiting for dashboard to load...");
+        // 🟢 NEW LOGIC: Polling for the Cookie
+        console.log("⏳ Login submitted. Polling specifically for 'apiToken' cookie...");
         
-        // Wait until we are NO LONGER on the sign-in page
+        // Wait until we leave the sign-in page
         await page.waitForFunction(() => !window.location.href.includes('sign-in'), { timeout: 60000 });
-        
-        console.log("⏳ Dashboard loaded. Giving cookies 5s to set...");
-        await new Promise(r => setTimeout(r, 5000));
+        console.log("⏳ Dashboard URL detected. checking cookies loop...");
 
-        // 🟢 EXTRACT COOKIES
-        const cookies = await page.cookies();
-        console.log(`🍪 Found ${cookies.length} cookies.`);
+        let foundToken = null;
+        let attempts = 0;
+        const maxAttempts = 15; // Try for 30 seconds (15 * 2s)
 
-        // Find the 'apiToken' cookie (case-insensitive search)
-        const targetCookie = cookies.find(c => c.name.toLowerCase().includes('apitoken'));
+        while (!foundToken && attempts < maxAttempts) {
+            attempts++;
+            // Get all cookies for the current URL
+            const cookies = await page.cookies();
+            const targetCookie = cookies.find(c => c.name === 'apiToken');
 
-        if (targetCookie) {
-            console.log("🔥 FOUND 'apiToken' COOKIE:", targetCookie.value.substring(0, 15) + "...");
-            
+            if (targetCookie) {
+                foundToken = targetCookie.value;
+                console.log(`🔥 FOUND 'apiToken' on attempt ${attempts}:`, foundToken.substring(0, 15) + "...");
+            } else {
+                console.log(`... attempt ${attempts}/${maxAttempts}: apiToken not yet present. Waiting 2s...`);
+                // Log what IS there to help debug if it fails
+                // console.log("   (Present cookies: " + cookies.map(c => c.name).join(', ') + ")");
+                await new Promise(r => setTimeout(r, 2000));
+            }
+        }
+
+        if (foundToken) {
             console.log("🚀 Syncing token with Supabase...");
             await axios.post(CONFIG.supabaseUrl, 
-                { access_token: targetCookie.value }, 
+                { access_token: foundToken }, 
                 { headers: { 'Content-Type': 'application/json' } }
             );
-            return "Success: Cookie Token Updated";
+            return "Success: Token Updated";
         } else {
-            // Log what we found to help debug
-            const cookieNames = cookies.map(c => c.name).join(', ');
-            console.log("❌ 'apiToken' not found. Cookies present: ", cookieNames);
-            throw new Error("Target cookie not found.");
+            // Final check of what WAS there
+            const cookies = await page.cookies();
+            const names = cookies.map(c => c.name).join(', ');
+            throw new Error(`Timed out waiting for apiToken. Final cookies visible: ${names}`);
         }
 
     } catch (error) {
