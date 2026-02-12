@@ -5,14 +5,14 @@ const axios = require('axios');
 const express = require('express');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000; // Render uses 10000 by default
 
 // Configuration from Render Environment Variables
 const CONFIG = {
     email: process.env.SARVINARCK_EMAIL,
     password: process.env.SARVINARCK_PASSWORD,
     gmailUser: process.env.GMAIL_USER,
-    gmailPass: process.env.GMAIL_APP_PASSWORD, // Your 16-char app password
+    gmailPass: process.env.GMAIL_APP_PASSWORD, // Your 16-char app password: jmeo xsnk yixn oxkp
     supabaseUrl: process.env.SUPABASE_FUNCTION_URL
 };
 
@@ -35,7 +35,7 @@ async function getLatestCode() {
     try {
         const connection = await imap.connect(imapConfig);
         
-        // Open 'All Mail' to ensure we catch emails regardless of labels (Updates/Promos)
+        // Open 'All Mail' to catch emails in Updates/Promos/Inbox
         await connection.openBox('[Gmail]/All Mail'); 
 
         // Look for emails received in the last 5 minutes
@@ -50,7 +50,6 @@ async function getLatestCode() {
             const messages = await connection.search(searchCriteria, fetchOptions);
             
             if (messages.length > 0) {
-                // Check the most recent 3 messages in reverse order
                 const recentMessages = messages.slice(-3).reverse(); 
                 
                 for (let item of recentMessages) {
@@ -61,7 +60,7 @@ async function getLatestCode() {
 
                     console.log(`📩 Checking email from: ${parsed.from.text} | Subject: ${parsed.subject}`);
 
-                    // Regex to find a 6-digit code (e.g., 123456)
+                    // Regex to find a 6-digit code
                     const codeMatch = parsed.text.match(/\b\d{6}\b/);
 
                     if (codeMatch) {
@@ -93,7 +92,7 @@ async function runBot() {
         args: [
             '--no-sandbox', 
             '--disable-setuid-sandbox', 
-            '--disable-dev-shm-usage', // Critical for Render stability
+            '--disable-dev-shm-usage', // Critical for Render memory stability
             '--disable-gpu'
         ],
         executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
@@ -103,13 +102,13 @@ async function runBot() {
     try {
         const page = await browser.newPage();
         
-        // Increase timeouts for slow Render containers
+        // High timeouts for slow server instances
         page.setDefaultNavigationTimeout(90000); 
         page.setDefaultTimeout(90000);
 
         let capturedToken = null;
 
-        // Listen for the specific OAuth2 token response
+        // Capture the token from the background network request
         page.on('response', async (res) => {
             if (res.url().includes('oauth2/token')) {
                 try {
@@ -118,26 +117,30 @@ async function runBot() {
                         console.log("🔥 ACCESS TOKEN CAPTURED!");
                         capturedToken = data.access_token;
                     }
-                } catch (e) {
-                    // Ignore non-JSON or unrelated token responses
-                }
+                } catch (e) {}
             }
         });
 
         console.log("🔵 Navigating to Sarvinarck Sign-in...");
         await page.goto('https://app.sarvinarck.com/sign-in', { 
-            waitUntil: 'domcontentloaded' // Faster than 'networkidle'
+            waitUntil: 'domcontentloaded' 
         });
 
         // Step 1: Login Credentials
-        await page.waitForSelector('input[type="text"]', { visible: true });
-        await page.type('input[type="text"]', CONFIG.email); 
-        await page.type('input[type="password"]', CONFIG.password);
-        await page.click('button[type="submit"]');
-
-        console.log("⏳ Credentials submitted. Waiting for 2FA input field...");
+        console.log("⌨️ Typing email...");
+        await page.waitForSelector('input[name="loginId"], input[type="text"]', { visible: true });
+        await page.type('input[name="loginId"]', CONFIG.email, { delay: 50 }); 
         
+        console.log("⌨️ Typing password...");
+        await page.waitForSelector('input[name="password"]', { visible: true });
+        await page.type('input[name="password"]', CONFIG.password, { delay: 50 });
+        
+        // PRESS ENTER FIX: Avoids button selector errors
+        console.log("⌨️ Pressing Enter to submit...");
+        await page.keyboard.press('Enter');
+
         // Step 2: 2FA Screen
+        console.log("⏳ Waiting for 2FA screen...");
         await page.waitForSelector('input[name="code"]', { visible: true, timeout: 45000 });
 
         // Step 3: Retrieve Code from Gmail
@@ -145,13 +148,11 @@ async function runBot() {
         if (!code) throw new Error("Could not retrieve 2FA code from Gmail.");
 
         // Step 4: Submit 2FA Code
-        await page.type('input[name="code"]', code);
+        await page.type('input[name="code"]', code, { delay: 100 });
         await page.keyboard.press('Enter');
 
-        console.log("⏳ Code submitted. Finalizing login...");
-        
-        // Step 5: Wait for Redirect/Success
-        // We wait for the URL to change to home or for the loading overlay to appear
+        console.log("⏳ Verifying login...");
+        // Wait for URL to change to dashboard/home
         await page.waitForFunction(() => 
             window.location.href.includes('home') || !!document.querySelector('.w-load-wrap'), 
             { timeout: 30000 }
@@ -162,7 +163,7 @@ async function runBot() {
             await axios.post(CONFIG.supabaseUrl, { access_token: capturedToken });
             return "Success: Token Updated";
         } else {
-            throw new Error("Login completed but no access_token was intercepted.");
+            throw new Error("No token captured during login.");
         }
 
     } catch (error) {
@@ -174,15 +175,14 @@ async function runBot() {
     }
 }
 
-// Endpoint to trigger the automation (e.g., via Cron-Job.org)
+// Trigger Route
 app.get('/refresh', async (req, res) => {
     const result = await runBot();
     res.send({ status: result });
 });
 
-// Basic health check
 app.get('/', (req, res) => {
-    res.send("Sarvinarck Token Bot is running. Use /refresh to trigger.");
+    res.send("Bot is active. Use /refresh to start.");
 });
 
-app.listen(PORT, () => console.log(`🚀 Server listening on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Listening on port ${PORT}`));
