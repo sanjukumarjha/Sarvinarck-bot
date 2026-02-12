@@ -72,11 +72,21 @@ async function getLatestCode() {
 // 3. Main Bot Logic
 async function runBot() {
     console.log("🤖 Bot starting...");
-    const browser = await puppeteer.launch({
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-        headless: 'new'
-    });
+    // ... inside runBot() ...
+const browser = await puppeteer.launch({
+    args: [
+        '--no-sandbox', 
+        '--disable-setuid-sandbox', 
+        '--disable-dev-shm-usage', 
+        '--disable-gpu',
+        // 🟢 CRITICAL FOR RENDER FREE TIER:
+        '--single-process', 
+        '--no-zygote',
+        '--renderer-process-limit=1'
+    ],
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+    headless: 'new'
+});
 
     try {
         const page = await browser.newPage();
@@ -170,3 +180,4 @@ app.get('/refresh', (req, res) => {
 app.get('/', (req, res) => res.send("Bot Active. Use /refresh to trigger."));
 
 app.listen(PORT, () => console.log(`🚀 Listening on port ${PORT}`));
+
