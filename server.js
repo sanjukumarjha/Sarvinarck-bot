@@ -27,28 +27,20 @@ async function getLatestCode() {
             host: 'imap.gmail.com',
             port: 993,
             tls: true,
-            // 🟢 ADD THIS LINE TO FIX THE CERTIFICATE ERROR:
             tlsOptions: { rejectUnauthorized: false }, 
             authTimeout: 10000
         }
     };
-    // ... rest of the function remains the same
 
     console.log("📧 Connecting to Gmail...");
     try {
         const connection = await imap.connect(imapConfig);
-        
-        // Open 'All Mail' to catch emails in Updates/Promos/Inbox
         await connection.openBox('[Gmail]/All Mail'); 
 
-        // Look for emails received in the last 5 minutes
         const delay = 5 * 60 * 1000; 
         const searchCriteria = [['SINCE', new Date(Date.now() - delay).toISOString()]];
         const fetchOptions = { bodies: ['HEADER', 'TEXT'], markSeen: false };
 
-        console.log("🔎 Scanning for recent 2FA emails...");
-
-        // Retry loop: Scan for 60 seconds (12 attempts x 5s)
         for (let i = 0; i < 12; i++) {
             const messages = await connection.search(searchCriteria, fetchOptions);
             
@@ -61,9 +53,12 @@ async function getLatestCode() {
                     const idHeader = "Imap-Id: "+id+"\r\n";
                     const parsed = await simpleParser(idHeader + all.body);
 
-                    console.log(`📩 Checking email from: ${parsed.from.text} | Subject: ${parsed.subject}`);
+                    // 🟢 FIX: Added '?.text' and '|| "Unknown"' to prevent the crash
+                    const fromEmail = parsed.from?.text || "Unknown Sender";
+                    const subjectLine = parsed.subject || "No Subject";
 
-                    // Regex to find a 6-digit code
+                    console.log(`📩 Checking: ${fromEmail} | Sub: ${subjectLine}`);
+
                     const codeMatch = parsed.text.match(/\b\d{6}\b/);
 
                     if (codeMatch) {
@@ -78,14 +73,12 @@ async function getLatestCode() {
         }
         
         connection.end();
-        console.log("❌ No code found in Gmail.");
         return null;
     } catch (err) {
         console.error("❌ Gmail IMAP Error:", err);
         return null;
     }
 }
-
 /**
  * Main automation function using Puppeteer
  */
@@ -189,4 +182,5 @@ app.get('/', (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`🚀 Listening on port ${PORT}`));
+
 
