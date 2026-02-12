@@ -7,16 +7,18 @@ const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 🟢 Load secrets from Render Environment Variables
+// Configuration from Render Environment Variables
 const CONFIG = {
     email: process.env.SARVINARCK_EMAIL,
     password: process.env.SARVINARCK_PASSWORD,
     gmailUser: process.env.GMAIL_USER,
-    gmailPass: process.env.GMAIL_APP_PASSWORD, // jmeo xsnk yixn oxkp
+    gmailPass: process.env.GMAIL_APP_PASSWORD, // Your 16-char app password
     supabaseUrl: process.env.SUPABASE_FUNCTION_URL
 };
 
-// Helper: Check Gmail for the latest code
+/**
+ * Connects to Gmail and searches for the 6-digit 2FA code
+ */
 async function getLatestCode() {
     const imapConfig = {
         imap: {
@@ -32,52 +34,68 @@ async function getLatestCode() {
     console.log("📧 Connecting to Gmail...");
     try {
         const connection = await imap.connect(imapConfig);
-        await connection.openBox('INBOX');
+        
+        // Open 'All Mail' to ensure we catch emails regardless of labels (Updates/Promos)
+        await connection.openBox('[Gmail]/All Mail'); 
 
-        // Look for emails from the last 5 minutes
+        // Look for emails received in the last 5 minutes
         const delay = 5 * 60 * 1000; 
         const searchCriteria = [['SINCE', new Date(Date.now() - delay).toISOString()]];
         const fetchOptions = { bodies: ['HEADER', 'TEXT'], markSeen: false };
 
-        // Retry loop: Scan inbox every 5 seconds for 1 minute
+        console.log("🔎 Scanning for recent 2FA emails...");
+
+        // Retry loop: Scan for 60 seconds (12 attempts x 5s)
         for (let i = 0; i < 12; i++) {
-            console.log(`🔎 Scanning Inbox (Attempt ${i+1})...`);
             const messages = await connection.search(searchCriteria, fetchOptions);
             
             if (messages.length > 0) {
-                // Get the very last email received
-                const item = messages[messages.length - 1];
-                const all = item.parts.find(part => part.which === 'TEXT');
-                const id = item.attributes.uid;
-                const idHeader = "Imap-Id: "+id+"\r\n";
-                const parsed = await simpleParser(idHeader + all.body);
-
-                // Regex to find a 6-digit code
-                const codeMatch = parsed.text.match(/\b\d{6}\b/);
+                // Check the most recent 3 messages in reverse order
+                const recentMessages = messages.slice(-3).reverse(); 
                 
-                // Safety check: Ensure it's likely from Sarvinarck
-                if (codeMatch && (parsed.subject.includes('Sarvinarck') || parsed.text.includes('verification'))) {
-                    console.log(`✅ FOUND CODE: ${codeMatch[0]}`);
-                    connection.end();
-                    return codeMatch[0];
+                for (let item of recentMessages) {
+                    const all = item.parts.find(part => part.which === 'TEXT');
+                    const id = item.attributes.uid;
+                    const idHeader = "Imap-Id: "+id+"\r\n";
+                    const parsed = await simpleParser(idHeader + all.body);
+
+                    console.log(`📩 Checking email from: ${parsed.from.text} | Subject: ${parsed.subject}`);
+
+                    // Regex to find a 6-digit code (e.g., 123456)
+                    const codeMatch = parsed.text.match(/\b\d{6}\b/);
+
+                    if (codeMatch) {
+                        console.log(`✅ FOUND CODE: ${codeMatch[0]}`);
+                        connection.end();
+                        return codeMatch[0];
+                    }
                 }
             }
-            await new Promise(r => setTimeout(r, 5000)); // Wait 5s
+            console.log(`... attempt ${i+1}/12 (waiting 5s)`);
+            await new Promise(r => setTimeout(r, 5000));
         }
         
         connection.end();
-        console.log("❌ No code found after 60 seconds.");
+        console.log("❌ No code found in Gmail.");
         return null;
     } catch (err) {
-        console.error("❌ Gmail Error:", err);
+        console.error("❌ Gmail IMAP Error:", err);
         return null;
     }
 }
 
+/**
+ * Main automation function using Puppeteer
+ */
 async function runBot() {
     console.log("🤖 Bot starting...");
     const browser = await puppeteer.launch({
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        args: [
+            '--no-sandbox', 
+            '--disable-setuid-sandbox', 
+            '--disable-dev-shm-usage', // Critical for Render stability
+            '--disable-gpu'
+        ],
         executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
         headless: 'new'
     });
@@ -85,8 +103,13 @@ async function runBot() {
     try {
         const page = await browser.newPage();
         
-        // 1. Listen for the token network request
+        // Increase timeouts for slow Render containers
+        page.setDefaultNavigationTimeout(90000); 
+        page.setDefaultTimeout(90000);
+
         let capturedToken = null;
+
+        // Listen for the specific OAuth2 token response
         page.on('response', async (res) => {
             if (res.url().includes('oauth2/token')) {
                 try {
@@ -95,60 +118,71 @@ async function runBot() {
                         console.log("🔥 ACCESS TOKEN CAPTURED!");
                         capturedToken = data.access_token;
                     }
-                } catch (e) {}
+                } catch (e) {
+                    // Ignore non-JSON or unrelated token responses
+                }
             }
         });
 
-        // 2. Log In
-        await page.goto('https://app.sarvinarck.com/sign-in', { waitUntil: 'networkidle2' });
-        
-        // Type credentials (Update selectors if they change!)
+        console.log("🔵 Navigating to Sarvinarck Sign-in...");
+        await page.goto('https://app.sarvinarck.com/sign-in', { 
+            waitUntil: 'domcontentloaded' // Faster than 'networkidle'
+        });
+
+        // Step 1: Login Credentials
+        await page.waitForSelector('input[type="text"]', { visible: true });
         await page.type('input[type="text"]', CONFIG.email); 
         await page.type('input[type="password"]', CONFIG.password);
-        await page.keyboard.press('Enter');
+        await page.click('button[type="submit"]');
 
-        console.log("⏳ Credentials entered. Waiting for 2FA input...");
+        console.log("⏳ Credentials submitted. Waiting for 2FA input field...");
         
-        // 3. Wait for 2FA Screen
-        try {
-            await page.waitForSelector('input[name="code"]', { timeout: 15000 });
-        } catch(e) {
-            console.log("⚠️ 2FA Input not found. Maybe we are already logged in?");
-        }
+        // Step 2: 2FA Screen
+        await page.waitForSelector('input[name="code"]', { visible: true, timeout: 45000 });
 
-        // 4. Get Code from Gmail
+        // Step 3: Retrieve Code from Gmail
         const code = await getLatestCode();
-        if (!code) throw new Error("Could not get 2FA code.");
+        if (!code) throw new Error("Could not retrieve 2FA code from Gmail.");
 
-        // 5. Enter Code
+        // Step 4: Submit 2FA Code
         await page.type('input[name="code"]', code);
         await page.keyboard.press('Enter');
 
-        // 6. Wait for dashboard and token capture
-        console.log("⏳ Verifying...");
-        await page.waitForTimeout(8000); 
+        console.log("⏳ Code submitted. Finalizing login...");
+        
+        // Step 5: Wait for Redirect/Success
+        // We wait for the URL to change to home or for the loading overlay to appear
+        await page.waitForFunction(() => 
+            window.location.href.includes('home') || !!document.querySelector('.w-load-wrap'), 
+            { timeout: 30000 }
+        );
 
         if (capturedToken) {
-            console.log("🚀 Sending token to Supabase...");
-            // Send to your Supabase function
+            console.log("🚀 Syncing token with Supabase...");
             await axios.post(CONFIG.supabaseUrl, { access_token: capturedToken });
             return "Success: Token Updated";
         } else {
-            throw new Error("Login worked, but token was not captured.");
+            throw new Error("Login completed but no access_token was intercepted.");
         }
 
     } catch (error) {
-        console.error("❌ Failed:", error.message);
+        console.error("❌ Automation Failure:", error.message);
         return "Error: " + error.message;
     } finally {
         await browser.close();
+        console.log("🤖 Bot shutting down.");
     }
 }
 
-// Endpoint to trigger the bot
+// Endpoint to trigger the automation (e.g., via Cron-Job.org)
 app.get('/refresh', async (req, res) => {
     const result = await runBot();
     res.send({ status: result });
 });
 
-app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
+// Basic health check
+app.get('/', (req, res) => {
+    res.send("Sarvinarck Token Bot is running. Use /refresh to trigger.");
+});
+
+app.listen(PORT, () => console.log(`🚀 Server listening on port ${PORT}`));
