@@ -69,21 +69,23 @@ async function getLatestCode() {
     }
 }
 
-// 3. Main Bot Logic
+// ... (Your imports and CONFIG remain the same) ...
+
 async function runBot() {
     console.log("🤖 Bot starting...");
     
-    // 🟢 UPDATED: Memory Optimization Flags included here
+    // 🟢 UPDATED LAUNCH ARGUMENTS
+    // We removed '--single-process' because it causes "Target closed" errors.
     const browser = await puppeteer.launch({
         args: [
             '--no-sandbox', 
             '--disable-setuid-sandbox', 
             '--disable-dev-shm-usage', 
             '--disable-gpu',
-            // 🟢 CRITICAL FLAGS FOR RENDER FREE TIER (Prevents crashes):
-            '--single-process', 
+            // '--single-process',  <-- REMOVED THIS (It causes crashes)
             '--no-zygote',
-            '--renderer-process-limit=1'
+            '--renderer-process-limit=1', // This is safe to keep
+            '--disable-extensions'
         ],
         executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
         headless: 'new'
@@ -93,6 +95,16 @@ async function runBot() {
         const page = await browser.newPage();
         page.setDefaultNavigationTimeout(90000); 
         page.setDefaultTimeout(90000);
+
+        // 🟢 BLOCK HEAVY ASSETS (Saves Memory)
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+            if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
+                req.abort();
+            } else {
+                req.continue();
+            }
+        });
 
         console.log("🔵 Navigating to Sarvinarck Sign-in...");
         await page.goto('https://app.sarvinarck.com/sign-in', { waitUntil: 'domcontentloaded' });
@@ -115,13 +127,12 @@ async function runBot() {
         // 🟢 COOKIE POLLING LOOP
         console.log("⏳ Login submitted. Polling for 'apiToken' cookie...");
         
-        // Wait until we leave the sign-in page
         await page.waitForFunction(() => !window.location.href.includes('sign-in'), { timeout: 60000 });
         console.log("⏳ Dashboard URL detected. Entering polling loop...");
 
         let foundToken = null;
         let attempts = 0;
-        const maxAttempts = 15; // Try for 30 seconds (15 * 2s)
+        const maxAttempts = 15;
 
         while (!foundToken && attempts < maxAttempts) {
             attempts++;
@@ -158,7 +169,6 @@ async function runBot() {
         console.log("🤖 Bot shutting down.");
     }
 }
-
 // 4. Server Routes
 // 🟢 FAST RESPONSE: Prevents Cron Job Timeout (Essential for 30-min schedule)
 app.get('/refresh', (req, res) => {
@@ -181,3 +191,4 @@ app.get('/refresh', (req, res) => {
 app.get('/', (req, res) => res.send("Bot Active. Use /refresh to trigger."));
 
 app.listen(PORT, () => console.log(`🚀 Listening on port ${PORT}`));
+
