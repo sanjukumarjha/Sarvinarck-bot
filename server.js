@@ -72,21 +72,22 @@ async function getLatestCode() {
 // 3. Main Bot Logic
 async function runBot() {
     console.log("🤖 Bot starting...");
-    // ... inside runBot() ...
-const browser = await puppeteer.launch({
-    args: [
-        '--no-sandbox', 
-        '--disable-setuid-sandbox', 
-        '--disable-dev-shm-usage', 
-        '--disable-gpu',
-        // 🟢 CRITICAL FOR RENDER FREE TIER:
-        '--single-process', 
-        '--no-zygote',
-        '--renderer-process-limit=1'
-    ],
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-    headless: 'new'
-});
+    
+    // 🟢 UPDATED: Memory Optimization Flags included here
+    const browser = await puppeteer.launch({
+        args: [
+            '--no-sandbox', 
+            '--disable-setuid-sandbox', 
+            '--disable-dev-shm-usage', 
+            '--disable-gpu',
+            // 🟢 CRITICAL FLAGS FOR RENDER FREE TIER (Prevents crashes):
+            '--single-process', 
+            '--no-zygote',
+            '--renderer-process-limit=1'
+        ],
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+        headless: 'new'
+    });
 
     try {
         const page = await browser.newPage();
@@ -153,13 +154,13 @@ const browser = await puppeteer.launch({
         console.error("❌ Automation Failure:", error.message);
         return "Error: " + error.message;
     } finally {
-        await browser.close();
+        if (browser) await browser.close();
         console.log("🤖 Bot shutting down.");
     }
 }
 
 // 4. Server Routes
-// 🟢 FAST RESPONSE: Prevents Cron Job Timeout
+// 🟢 FAST RESPONSE: Prevents Cron Job Timeout (Essential for 30-min schedule)
 app.get('/refresh', (req, res) => {
     console.log("🚀 Cron Job Triggered! Sending immediate 'OK' response...");
 
@@ -170,7 +171,7 @@ app.get('/refresh', (req, res) => {
         console.error("💥 Background Bot Failed:", err);
     });
 
-    // Respond immediately
+    // Respond immediately to satisfy Cron-Job.org timeout
     res.send({ 
         status: "Bot started in background. Check Render logs for results.", 
         timestamp: new Date().toISOString() 
@@ -180,4 +181,3 @@ app.get('/refresh', (req, res) => {
 app.get('/', (req, res) => res.send("Bot Active. Use /refresh to trigger."));
 
 app.listen(PORT, () => console.log(`🚀 Listening on port ${PORT}`));
-
