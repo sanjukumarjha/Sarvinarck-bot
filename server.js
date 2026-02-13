@@ -9,9 +9,10 @@ app.get('/refresh', (req, res) => {
     res.status(200).json({ status: "Spawned detached bot" });
 
     // 2. Launch the bot completely outside of the Express event loop
+    // 2. Launch the bot completely outside of the Express event loop
     const child = spawn('node', ['bot.js'], {
-        detached: true,     // OS runs this independently
-        stdio: 'ignore'     // Disconnects logs from the parent so Cron never sees them
+        detached: true,     
+        stdio: 'inherit'    // ✨ CHANGED: This brings your logs back to Render!
     });
 
     // 3. Sever the tie so the server doesn't wait for the bot to finish
@@ -25,3 +26,4 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
     console.log(`🚀 Web Server listening on port ${PORT}`);
 });
+
