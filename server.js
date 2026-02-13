@@ -7,16 +7,22 @@ const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// 1. Configuration
+/* ================================
+   CONFIGURATION
+================================ */
+
 const CONFIG = {
     email: process.env.SARVINARCK_EMAIL,
     password: process.env.SARVINARCK_PASSWORD,
     gmailUser: process.env.GMAIL_USER,
-    gmailPass: process.env.GMAIL_APP_PASSWORD, 
+    gmailPass: process.env.GMAIL_APP_PASSWORD,
     supabaseUrl: process.env.SUPABASE_FUNCTION_URL
 };
 
-// 2. Helper: Fetch 2FA Code from Gmail
+/* ================================
+   FETCH 2FA CODE FROM GMAIL
+================================ */
+
 async function getLatestCode() {
     const imapConfig = {
         imap: {
@@ -25,78 +31,78 @@ async function getLatestCode() {
             host: 'imap.gmail.com',
             port: 993,
             tls: true,
-            tlsOptions: { rejectUnauthorized: false }, 
+            tlsOptions: { rejectUnauthorized: false },
             authTimeout: 15000
         }
     };
 
-    console.log("📧 Connecting to Gmail...");
     try {
         const connection = await imap.connect(imapConfig);
-        await connection.openBox('[Gmail]/All Mail'); 
+        await connection.openBox('[Gmail]/All Mail');
 
-        const delay = 5 * 60 * 1000; 
-        const searchCriteria = [['SINCE', new Date(Date.now() - delay).toISOString()]];
-        const fetchOptions = { bodies: ['HEADER', 'TEXT'], markSeen: false };
+        const delay = 5 * 60 * 1000;
+        const searchCriteria = [['SINCE', new Date(Date.now() - delay)]];
+        const fetchOptions = { bodies: ['TEXT'], markSeen: false };
 
-        console.log("🔎 Scanning for recent 2FA emails...");
-
-        for (let i = 0; i < 12; i++) { // Try for 60 seconds (12 * 5s)
+        for (let i = 0; i < 12; i++) {
             const messages = await connection.search(searchCriteria, fetchOptions);
+
             if (messages.length > 0) {
-                const recentMessages = messages.slice(-3).reverse(); 
+                const recentMessages = messages.slice(-3).reverse();
+
                 for (let item of recentMessages) {
                     const all = item.parts.find(part => part.which === 'TEXT');
-                    const id = item.attributes.uid;
-                    const idHeader = "Imap-Id: "+id+"\r\n";
-                    const parsed = await simpleParser(idHeader + all.body);
-                    
+                    const parsed = await simpleParser(all.body);
+
                     const codeMatch = parsed.text?.match(/\b\d{6}\b/);
                     if (codeMatch) {
-                        console.log(`✅ FOUND CODE: ${codeMatch[0]}`);
                         connection.end();
                         return codeMatch[0];
                     }
                 }
             }
+
             await new Promise(r => setTimeout(r, 5000));
         }
+
         connection.end();
         return null;
+
     } catch (err) {
-        console.error("❌ Gmail IMAP Error:", err);
+        console.error("Gmail Error:", err.message);
         return null;
     }
 }
 
-// ... (Your imports and CONFIG remain the same) ...
+/* ================================
+   MAIN BOT
+================================ */
 
 async function runBot() {
-    console.log("🤖 Bot starting...");
-    
-    // 🟢 UPDATED LAUNCH ARGUMENTS
-    // We removed '--single-process' because it causes "Target closed" errors.
-    const browser = await puppeteer.launch({
-        args: [
-            '--no-sandbox', 
-            '--disable-setuid-sandbox', 
-            '--disable-dev-shm-usage', 
-            '--disable-gpu',
-            // '--single-process',  <-- REMOVED THIS (It causes crashes)
-            '--no-zygote',
-            '--renderer-process-limit=1', // This is safe to keep
-            '--disable-extensions'
-        ],
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-        headless: 'new'
-    });
+    console.log("🤖 Bot started");
+
+    let browser;
 
     try {
+        browser = await puppeteer.launch({
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--no-zygote',
+                '--renderer-process-limit=1',
+                '--disable-extensions'
+            ],
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+            headless: 'new'
+        });
+
         const page = await browser.newPage();
-        page.setDefaultNavigationTimeout(90000); 
+        page.setDefaultNavigationTimeout(90000);
         page.setDefaultTimeout(90000);
 
-        // 🟢 BLOCK HEAVY ASSETS (Saves Memory)
+        // Block heavy assets
         await page.setRequestInterception(true);
         page.on('request', (req) => {
             if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
@@ -106,89 +112,100 @@ async function runBot() {
             }
         });
 
-        console.log("🔵 Navigating to Sarvinarck Sign-in...");
-        await page.goto('https://app.sarvinarck.com/sign-in', { waitUntil: 'domcontentloaded' });
+        // Go to login
+        await page.goto('https://app.sarvinarck.com/sign-in', {
+            waitUntil: 'domcontentloaded'
+        });
 
-        // Login Flow
+        // Login
         await page.waitForSelector('input[name="loginId"]', { visible: true });
-        await page.type('input[name="loginId"]', CONFIG.email, { delay: 50 }); 
+        await page.type('input[name="loginId"]', CONFIG.email, { delay: 30 });
+
         await page.waitForSelector('input[name="password"]', { visible: true });
-        await page.type('input[name="password"]', CONFIG.password, { delay: 50 });
+        await page.type('input[name="password"]', CONFIG.password, { delay: 30 });
+
         await page.keyboard.press('Enter');
 
-        // 2FA Flow
-        console.log("⏳ Waiting for 2FA screen...");
+        // 2FA
         await page.waitForSelector('input[name="code"]', { visible: true, timeout: 45000 });
+
         const code = await getLatestCode();
-        if (!code) throw new Error("Could not retrieve 2FA code.");
-        await page.type('input[name="code"]', code, { delay: 100 });
+        if (!code) throw new Error("2FA code not found");
+
+        await page.type('input[name="code"]', code, { delay: 80 });
         await page.keyboard.press('Enter');
 
-        // 🟢 COOKIE POLLING LOOP
-        console.log("⏳ Login submitted. Polling for 'apiToken' cookie...");
-        
-        await page.waitForFunction(() => !window.location.href.includes('sign-in'), { timeout: 60000 });
-        console.log("⏳ Dashboard URL detected. Entering polling loop...");
+        // Wait until not on sign-in page
+        await page.waitForFunction(
+            () => !window.location.href.includes('sign-in'),
+            { timeout: 60000 }
+        );
 
+        // Poll for apiToken
         let foundToken = null;
-        let attempts = 0;
-        const maxAttempts = 15;
 
-        while (!foundToken && attempts < maxAttempts) {
-            attempts++;
+        for (let i = 0; i < 15; i++) {
             const cookies = await page.cookies();
-            const targetCookie = cookies.find(c => c.name === 'apiToken');
+            const tokenCookie = cookies.find(c => c.name === 'apiToken');
 
-            if (targetCookie) {
-                foundToken = targetCookie.value;
-                console.log(`🔥 FOUND 'apiToken' on attempt ${attempts}:`, foundToken.substring(0, 15) + "...");
-            } else {
-                console.log(`... attempt ${attempts}/${maxAttempts}: apiToken not found yet. Waiting 2s...`);
-                await new Promise(r => setTimeout(r, 2000));
+            if (tokenCookie) {
+                foundToken = tokenCookie.value;
+                break;
             }
+
+            await new Promise(r => setTimeout(r, 2000));
         }
 
-        if (foundToken) {
-            console.log("🚀 Syncing token with Supabase...");
-            await axios.post(CONFIG.supabaseUrl, 
-                { access_token: foundToken }, 
-                { headers: { 'Content-Type': 'application/json' } }
-            );
-            return "Success: Token Updated";
-        } else {
-            const cookies = await page.cookies();
-            const names = cookies.map(c => c.name).join(', ');
-            throw new Error(`Timed out waiting for apiToken. Cookies visible: ${names}`);
+        if (!foundToken) {
+            throw new Error("apiToken not found in cookies");
         }
 
-    } catch (error) {
-        console.error("❌ Automation Failure:", error.message);
-        return "Error: " + error.message;
+        // Send to Supabase
+        await axios.post(
+            CONFIG.supabaseUrl,
+            { access_token: foundToken },
+            {
+                headers: { 'Content-Type': 'application/json' },
+                timeout: 20000
+            }
+        );
+
+        console.log("✅ Token synced successfully");
+
+    } catch (err) {
+        console.error("❌ Bot Error:", err.message);
     } finally {
         if (browser) await browser.close();
-        console.log("🤖 Bot shutting down.");
+        console.log("🤖 Bot finished");
     }
 }
-// 4. Server Routes
-// 🟢 FAST RESPONSE: Prevents Cron Job Timeout (Essential for 30-min schedule)
+
+/* ================================
+   EXPRESS ROUTES
+================================ */
+
+// IMPORTANT: Tiny response for Cron
 app.get('/refresh', (req, res) => {
-    console.log("🚀 Cron Job Triggered! Sending immediate 'OK' response...");
 
-    // Start bot in background (no await)
-    runBot().then(result => {
-        console.log("🏁 Background Bot Finished:", result);
-    }).catch(err => {
-        console.error("💥 Background Bot Failed:", err);
-    });
+    // Send response IMMEDIATELY
+    res.setHeader('Content-Type', 'text/plain');
+    res.status(200).send('OK');
 
-    // Respond immediately to satisfy Cron-Job.org timeout
-    res.send({ 
-        status: "Bot started in background. Check Render logs for results.", 
-        timestamp: new Date().toISOString() 
+    // Run bot in background
+    setImmediate(() => {
+        runBot().catch(err => console.error("Background Error:", err));
     });
 });
 
-app.get('/', (req, res) => res.send("Bot Active. Use /refresh to trigger."));
+app.get('/', (req, res) => {
+    res.setHeader('Content-Type', 'text/plain');
+    res.status(200).send('Bot is running');
+});
 
-app.listen(PORT, () => console.log(`🚀 Listening on port ${PORT}`));
+/* ================================
+   START SERVER
+================================ */
 
+app.listen(PORT, () => {
+    console.log(`🚀 Server listening on port ${PORT}`);
+});
