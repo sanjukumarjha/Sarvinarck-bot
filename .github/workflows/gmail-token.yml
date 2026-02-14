@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Setup Node
@@ -16,10 +16,10 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install googleapis
+      - name: Install Dependencies
         run: npm install googleapis
 
-      - name: Generate Auth URL
+      - name: Generate Authorization URL
         run: |
           node -e "
           const { google } = require('googleapis');
@@ -27,14 +27,17 @@ jobs:
           const oAuth2Client = new google.auth.OAuth2(
             '${{ secrets.GMAIL_CLIENT_ID }}',
             '${{ secrets.GMAIL_CLIENT_SECRET }}',
-            'urn:ietf:wg:oauth:2.0:oob'
+            'http://localhost'
           );
 
-          const url = oAuth2Client.generateAuthUrl({
+          const authUrl = oAuth2Client.generateAuthUrl({
             access_type: 'offline',
-            scope: ['https://www.googleapis.com/auth/gmail.readonly']
+            scope: ['https://www.googleapis.com/auth/gmail.readonly'],
+            prompt: 'consent'
           });
 
+          console.log('==============================');
           console.log('OPEN THIS URL IN YOUR BROWSER:');
-          console.log(url);
+          console.log(authUrl);
+          console.log('==============================');
           "
