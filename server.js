@@ -5,25 +5,22 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 app.get('/refresh', (req, res) => {
-    // 1. Send the tiniest possible response IMMEDIATELY
-    res.status(200).json({ status: "Spawned detached bot" });
 
-    // 2. Launch the bot completely outside of the Express event loop
-    // 2. Launch the bot completely outside of the Express event loop
+    // Send tiny response immediately
+    res.status(200).send("OK");
+
     const child = spawn('node', ['bot.js'], {
-        detached: true,     
-        stdio: 'inherit'    // ✨ CHANGED: This brings your logs back to Render!
+        detached: true,
+        stdio: 'ignore'   // 🔥 IMPORTANT FIX
     });
 
-    // 3. Sever the tie so the server doesn't wait for the bot to finish
-    child.unref(); 
+    child.unref();
 });
 
 app.get('/', (req, res) => {
-    res.status(200).send('Bot Server is Active. Use /refresh to trigger.');
+    res.status(200).send('Bot Server is Active.');
 });
 
 app.listen(PORT, () => {
     console.log(`🚀 Web Server listening on port ${PORT}`);
 });
-
