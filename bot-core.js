@@ -2,214 +2,156 @@ const puppeteer = require("puppeteer");
 const axios = require("axios");
 const { google } = require("googleapis");
 
-/* ---------------------------------------------------
-   ENV CONFIG
---------------------------------------------------- */
-
 const CONFIG = {
-  email: process.env.SARVINARCK_EMAIL,
-  password: process.env.SARVINARCK_PASSWORD,
-  supabaseUrl: process.env.SUPABASE_FUNCTION_URL,
+    email: process.env.SARVINARCK_EMAIL,
+    password: process.env.SARVINARCK_PASSWORD,
+    supabaseUrl: process.env.SUPABASE_FUNCTION_URL,
 
-  gmailUser: process.env.GMAIL_USER,
-  gmailClientId: process.env.GMAIL_CLIENT_ID,
-  gmailClientSecret: process.env.GMAIL_CLIENT_SECRET,
-  gmailRefreshToken: process.env.GMAIL_REFRESH_TOKEN,
+    gmailUser: process.env.GMAIL_USER,
+    gmailClientId: process.env.GMAIL_CLIENT_ID,
+    gmailClientSecret: process.env.GMAIL_CLIENT_SECRET,
+    gmailRefreshToken: process.env.GMAIL_REFRESH_TOKEN
 };
 
 /* ---------------------------------------------------
-   GMAIL API SETUP (OAuth2)
+   GMAIL API SETUP
 --------------------------------------------------- */
-
 const oAuth2Client = new google.auth.OAuth2(
-  CONFIG.gmailClientId,
-  CONFIG.gmailClientSecret
+    CONFIG.gmailClientId,
+    CONFIG.gmailClientSecret
 );
 
 oAuth2Client.setCredentials({
-  refresh_token: CONFIG.gmailRefreshToken,
+    refresh_token: CONFIG.gmailRefreshToken
 });
 
-const gmail = google.gmail({ version: "v1", auth: oAuth2Client });
+const gmail = google.gmail({
+    version: "v1",
+    auth: oAuth2Client
+});
 
 /* ---------------------------------------------------
-   GET LATEST 2FA CODE FROM GMAIL USING API
+   GET LATEST OTP FROM GMAIL
 --------------------------------------------------- */
-
-async function getLatestCode() {
+async function getLatestOTP() {
     console.log("📩 Checking Gmail for 2FA code...");
 
-// Wait 35 seconds for email
-await new Promise(resolve => setTimeout(resolve, 35000));
+    // wait 35 seconds for OTP email to arrive
+    await new Promise(resolve => setTimeout(resolve, 35000));
 
-const res = await gmail.users.messages.list({
-    userId: "me",
-    maxResults: 5
-});
-
-if (!res.data.messages || res.data.messages.length === 0) {
-    throw new Error("No recent emails found.");
-}
-
-let otpCode = null;
-
-for (const msg of res.data.messages) {
-
-    const email = await gmail.users.messages.get({
+    const res = await gmail.users.messages.list({
         userId: "me",
-        id: msg.id,
-        format: "full"
+        maxResults: 5
     });
 
-    const headers = email.data.payload.headers;
-    const subjectHeader = headers.find(h => h.name === "Subject");
-
-    if (!subjectHeader || !subjectHeader.value.includes("Verification")) {
-        continue;
+    if (!res.data.messages) {
+        throw new Error("No recent emails found.");
     }
 
-    let body = "";
+    for (const msg of res.data.messages) {
+        const email = await gmail.users.messages.get({
+            userId: "me",
+            id: msg.id,
+            format: "full"
+        });
 
-    if (email.data.payload.parts) {
-        for (const part of email.data.payload.parts) {
-            if (part.mimeType === "text/html" || part.mimeType === "text/plain") {
-                body = Buffer.from(part.body.data, "base64").toString("utf8");
-                break;
-            }
+        const headers = email.data.payload.headers;
+        const subject = headers.find(h => h.name === "Subject");
+
+        if (!subject || !subject.value.includes("Verification")) {
+            continue;
         }
-    } else if (email.data.payload.body.data) {
-        body = Buffer.from(email.data.payload.body.data, "base64").toString("utf8");
+
+        let body = "";
+
+        if (email.data.payload.parts) {
+            for (const part of email.data.payload.parts) {
+                if (
+                    part.mimeType === "text/html" ||
+                    part.mimeType === "text/plain"
+                ) {
+                    body = Buffer.from(
+                        part.body.data,
+                        "base64"
+                    ).toString("utf8");
+                    break;
+                }
+            }
+        } else if (email.data.payload.body?.data) {
+            body = Buffer.from(
+                email.data.payload.body.data,
+                "base64"
+            ).toString("utf8");
+        }
+
+        const match = body.match(/\b\d{6}\b/);
+        if (match) {
+            console.log("✅ OTP Found:", match[0]);
+            return match[0];
+        }
     }
 
-    const match = body.match(/\b\d{6}\b/);
-    if (match) {
-        otpCode = match[0];
-        break;
-    }
-}
-
-if (!otpCode) {
     throw new Error("2FA code not found");
 }
 
-console.log("✅ 2FA Code Found:", otpCode);
+/* ---------------------------------------------------
+   MAIN BOT
+--------------------------------------------------- */
+async function runBot() {
+    console.log("🤖 Core Bot Started");
 
-                return match[0];
-            }
+    const browser = await puppeteer.launch({
+        headless: "new",
+        args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    });
+
+    try {
+        const page = await browser.newPage();
+
+        console.log("🌐 Opening Sarvinarck login...");
+        await page.goto("https://app.sarvinarck.com/sign-in", {
+            waitUntil: "domcontentloaded"
+        });
+
+        await page.type('input[name="loginId"]', CONFIG.email);
+        await page.type('input[name="password"]', CONFIG.password);
+        await page.keyboard.press("Enter");
+
+        console.log("⏳ Waiting for 2FA input...");
+        await page.waitForSelector('input[name="code"]', {
+            timeout: 60000
+        });
+
+        const otp = await getLatestOTP();
+
+        console.log("🔐 Entering OTP...");
+        await page.type('input[name="code"]', otp);
+        await page.keyboard.press("Enter");
+
+        await page.waitForTimeout(8000);
+
+        const cookies = await page.cookies();
+        const tokenCookie = cookies.find(c => c.name === "apiToken");
+
+        if (!tokenCookie) {
+            throw new Error("apiToken not found");
         }
 
-        console.log("❌ 2FA code not found in recent emails.");
-        return null;
+        console.log("📡 Sending token to Supabase...");
 
-    } catch (error) {
-        console.error("❌ Gmail API Error:", error.message);
-        return null;
+        await axios.post(CONFIG.supabaseUrl, {
+            access_token: tokenCookie.value
+        });
+
+        console.log("✅ Token synced successfully");
+
+    } catch (err) {
+        console.error("❌ Core Bot Error:", err.message);
+        throw err;
+    } finally {
+        await browser.close();
+        console.log("🤖 Core Bot Finished");
     }
-}
-
-/* ---------------------------------------------------
-   MAIN BOT LOGIC
---------------------------------------------------- */
-
-async function runBot() {
-  console.log("🤖 Core Bot Started");
-
-  let browser;
-
-  try {
-    browser = await puppeteer.launch({
-      headless: "new",
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--no-zygote",
-        "--single-process",
-      ],
-    });
-
-    const page = await browser.newPage();
-    page.setDefaultNavigationTimeout(60000);
-    page.setDefaultTimeout(60000);
-
-    // Block heavy resources
-    await page.setRequestInterception(true);
-    page.on("request", (req) => {
-      if (["image", "stylesheet", "font", "media"].includes(req.resourceType())) {
-        req.abort();
-      } else {
-        req.continue();
-      }
-    });
-
-    console.log("🌐 Opening Sarvinarck login...");
-    await page.goto("https://app.sarvinarck.com/sign-in", {
-      waitUntil: "domcontentloaded",
-    });
-
-    await page.waitForSelector('input[name="loginId"]');
-    await page.type('input[name="loginId"]', CONFIG.email, { delay: 20 });
-
-    await page.waitForSelector('input[name="password"]');
-    await page.type('input[name="password"]', CONFIG.password, { delay: 20 });
-
-    await page.keyboard.press("Enter");
-
-    console.log("⏳ Waiting for 2FA input...");
-    await page.waitForSelector('input[name="code"]', {
-      visible: true,
-      timeout: 45000,
-    });
-
-    const code = await getLatestCode();
-    if (!code) throw new Error("2FA code not found");
-
-    await page.type('input[name="code"]', code, { delay: 50 });
-    await page.keyboard.press("Enter");
-
-    await page.waitForFunction(
-      () => !window.location.href.includes("sign-in"),
-      { timeout: 60000 }
-    );
-
-    console.log("🔎 Searching for apiToken cookie...");
-
-    let foundToken = null;
-
-    for (let i = 0; i < 15; i++) {
-      const cookies = await page.cookies();
-      const tokenCookie = cookies.find((c) => c.name === "apiToken");
-
-      if (tokenCookie) {
-        foundToken = tokenCookie.value;
-        break;
-      }
-
-      await new Promise((r) => setTimeout(r, 2000));
-    }
-
-    if (!foundToken) throw new Error("apiToken not found");
-
-    console.log("📤 Sending token to Supabase...");
-
-    await axios.post(
-      CONFIG.supabaseUrl,
-      { access_token: foundToken },
-      {
-        headers: { "Content-Type": "application/json" },
-        timeout: 15000,
-      }
-    );
-
-    console.log("✅ Token synced successfully!");
-  } catch (err) {
-    console.error("❌ Core Bot Error:", err.message);
-    throw err;
-  } finally {
-    if (browser) await browser.close();
-    console.log("🤖 Core Bot Finished");
-  }
 }
 
 module.exports = { runBot };
