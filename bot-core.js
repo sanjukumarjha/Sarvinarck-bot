@@ -37,56 +37,74 @@ const gmail = google.gmail({ version: "v1", auth: oAuth2Client });
 --------------------------------------------------- */
 
 async function getLatestCode() {
-  try {
     console.log("📩 Checking Gmail for 2FA code...");
 
-    const res = await gmail.users.messages.list({
-      userId: "me",
-      maxResults: 5,
-      q: "newer_than:5m",
+    const { google } = require("googleapis");
+
+    const oAuth2Client = new google.auth.OAuth2(
+        process.env.GMAIL_CLIENT_ID,
+        process.env.GMAIL_CLIENT_SECRET
+    );
+
+    oAuth2Client.setCredentials({
+        refresh_token: process.env.GMAIL_REFRESH_TOKEN,
     });
 
-    if (!res.data.messages || res.data.messages.length === 0) {
-      console.log("❌ No recent emails found.");
-      return null;
-    }
+    const gmail = google.gmail({ version: "v1", auth: oAuth2Client });
 
-    for (const msg of res.data.messages) {
-      const message = await gmail.users.messages.get({
-        userId: "me",
-        id: msg.id,
-        format: "full",
-      });
+    try {
+        console.log("⏳ Waiting 20 seconds for OTP email...");
+        await new Promise(resolve => setTimeout(resolve, 20000));
 
-      const parts = message.data.payload.parts || [];
-      let body = "";
+        const res = await gmail.users.messages.list({
+            userId: "me",
+            maxResults: 10,
+            q: "newer_than:5m from:no-reply@sarvinarck.com"
+        });
 
-      for (const part of parts) {
-        if (part.mimeType === "text/plain") {
-          body = Buffer.from(part.body.data, "base64").toString("utf-8");
+        if (!res.data.messages) {
+            console.log("❌ No recent emails found.");
+            return null;
         }
-      }
 
-      if (!body && message.data.payload.body?.data) {
-        body = Buffer.from(
-          message.data.payload.body.data,
-          "base64"
-        ).toString("utf-8");
-      }
+        for (const msg of res.data.messages) {
+            const email = await gmail.users.messages.get({
+                userId: "me",
+                id: msg.id,
+            });
 
-      const codeMatch = body.match(/\b\d{6}\b/);
-      if (codeMatch) {
-        console.log("✅ 2FA Code Found:", codeMatch[0]);
-        return codeMatch[0];
-      }
+            const parts = email.data.payload.parts || [];
+            let fullBody = "";
+
+            for (const part of parts) {
+                if (part.body && part.body.data) {
+                    const decoded = Buffer.from(part.body.data, "base64").toString("utf-8");
+                    fullBody += decoded;
+                }
+            }
+
+            if (!fullBody && email.data.payload.body.data) {
+                fullBody = Buffer.from(
+                    email.data.payload.body.data,
+                    "base64"
+                ).toString("utf-8");
+            }
+
+            const match = fullBody.match(/\b\d{6}\b/);
+
+            if (match) {
+                console.log("✅ 2FA Code Found:", match[0]);
+                return match[0];
+            }
+        }
+
+        console.log("❌ 2FA code not found in recent emails.");
+        return null;
+
+    } catch (error) {
+        console.error("❌ Gmail API Error:", error.message);
+        return null;
     }
-
-    console.log("❌ 2FA code not found in recent emails.");
-    return null;
-  } catch (error) {
-    console.error("❌ Gmail API Error:", error.message);
-    return null;
-  }
 }
 
 /* ---------------------------------------------------
