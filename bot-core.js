@@ -16,15 +16,16 @@ const CONFIG = {
 --------------------------------------------------- */
 async function getLatestCode() {
     const imapConfig = {
-        imap: {
-            user: CONFIG.gmailUser,
-            password: CONFIG.gmailPass,
-            host: 'imap.gmail.com',
-            port: 993,
-            tls: true,
-            authTimeout: 10000
-        }
-    };
+    imap: {
+        user: CONFIG.gmailUser,
+        password: CONFIG.gmailPass,
+        host: 'imap.gmail.com',
+        port: 993,
+        tls: true,
+        tlsOptions: { rejectUnauthorized: false },  // 🔥 FIX
+        authTimeout: 10000
+    }
+};
 
     try {
         const connection = await imap.connect(imapConfig);
