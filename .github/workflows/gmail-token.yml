@@ -1,0 +1,40 @@
+name: Generate Gmail Refresh Token
+
+on:
+  workflow_dispatch:
+
+jobs:
+  generate-token:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install googleapis
+        run: npm install googleapis
+
+      - name: Generate Auth URL
+        run: |
+          node -e "
+          const { google } = require('googleapis');
+
+          const oAuth2Client = new google.auth.OAuth2(
+            '${{ secrets.GMAIL_CLIENT_ID }}',
+            '${{ secrets.GMAIL_CLIENT_SECRET }}',
+            'urn:ietf:wg:oauth:2.0:oob'
+          );
+
+          const url = oAuth2Client.generateAuthUrl({
+            access_type: 'offline',
+            scope: ['https://www.googleapis.com/auth/gmail.readonly']
+          });
+
+          console.log('OPEN THIS URL IN YOUR BROWSER:');
+          console.log(url);
+          "
