@@ -18,6 +18,9 @@ const SCRIPT_START_TIME = Date.now();
 /* ---------------------------------------------------
    GET 2FA CODE (ROBUST POLLING)
 --------------------------------------------------- */
+/* ---------------------------------------------------
+   GET 2FA CODE (DIRECT INBOX CHECK - NO SEARCH)
+--------------------------------------------------- */
 async function getLatestCode() {
   console.log("📩 Initializing Gmail Client...");
 
@@ -36,53 +39,65 @@ async function getLatestCode() {
   const maxRetries = 18; 
   
   for (let i = 0; i < maxRetries; i++) {
-    console.log(`⏳ [Attempt ${i + 1}/${maxRetries}] Checking for OTP email...`);
+    console.log(`⏳ [Attempt ${i + 1}/${maxRetries}] Scanning Inbox for Sarvinarck email...`);
     
     try {
-      // 1. Fetch list of recent emails from sender (removing 'newer_than' to avoid index lag)
+      // 1. FETCH RAW INBOX (No 'q' filter to avoid indexing lag or typo issues)
       const res = await gmail.users.messages.list({
         userId: "me",
-        maxResults: 5, 
-        q: "from:no-reply@sarvinarck.com", 
+        maxResults: 10, // Grab the last 10 emails received
       });
 
       if (res.data.messages && res.data.messages.length > 0) {
-        // 2. check the most recent message
-        const messageId = res.data.messages[0].id;
-        const message = await gmail.users.messages.get({
-          userId: "me",
-          id: messageId,
-        });
-
-        // 3. Verify timestamp (Is it actually new?)
-        // internalDate is a string in ms
-        const emailTime = parseInt(message.data.internalDate, 10);
         
-        // Check if email was received AFTER the script started (minus a small buffer)
-        if (emailTime > (SCRIPT_START_TIME - 30000)) { 
-          const body = Buffer.from(
-            message.data.payload.parts
-              ? message.data.payload.parts[0].body.data
-              : message.data.payload.body.data,
-            "base64"
-          ).toString("utf-8");
+        // 2. Loop through recent emails to find the one from Sarvinarck
+        for (const msg of res.data.messages) {
+          const message = await gmail.users.messages.get({
+            userId: "me",
+            id: msg.id,
+          });
 
-          const match = body.match(/\b\d{6}\b/);
-          if (match) {
-            console.log("✅ 2FA Code Found:", match[0]);
-            return match[0];
-          } else {
-            console.log("⚠️ Email found but no code matched in body.");
+          // Extract Headers to check Sender/Subject
+          const headers = message.data.payload.headers;
+          const fromHeader = headers.find(h => h.name === 'From')?.value || '';
+          const subjectHeader = headers.find(h => h.name === 'Subject')?.value || '';
+          const internalDate = parseInt(message.data.internalDate, 10);
+
+          // DEBUG: Print what we see (helps you debug if it fails again)
+          // console.log(`   🔎 Scanned email from: ${fromHeader} | Subject: ${subjectHeader}`);
+
+          // 3. CHECK IF THIS IS THE RIGHT EMAIL
+          // We check if "Sarvinarck" is in the Sender OR Subject
+          if (fromHeader.includes("Sarvinarck") || subjectHeader.includes("Sarvinarck")) {
+            
+            // 4. Time Check: Is it recent? (within last 2 minutes)
+            if (internalDate > (Date.now() - 120000)) {
+                console.log(`✅ Found Target Email: "${subjectHeader}"`);
+
+                const body = Buffer.from(
+                    message.data.payload.parts
+                      ? message.data.payload.parts[0].body.data
+                      : message.data.payload.body.data,
+                    "base64"
+                ).toString("utf-8");
+
+                const match = body.match(/\b\d{6}\b/);
+                if (match) {
+                    console.log("🎉 2FA Code Extracted:", match[0]);
+                    return match[0];
+                } else {
+                    console.log("⚠️ Found Sarvinarck email, but could not regex match 6 digits.");
+                }
+            }
           }
-        } else {
-            console.log("⚠️ Found email, but it is old. Waiting for new one...");
         }
+        console.log("❌ Sarvinarck email not found in last 10 messages.");
       } else {
-        console.log("❌ No emails found yet.");
+        console.log("❌ Inbox is empty or inaccessible.");
       }
 
     } catch (err) {
-      console.error("⚠️ Gmail API Warning:", err.message);
+      console.error("⚠️ Gmail API Error:", err.message);
     }
 
     // Wait 5 seconds before next try
@@ -92,7 +107,6 @@ async function getLatestCode() {
   console.error("❌ Timeout: OTP email never arrived.");
   return null;
 }
-
 /* ---------------------------------------------------
    MAIN BOT
 --------------------------------------------------- */
