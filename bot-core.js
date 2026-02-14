@@ -39,61 +39,61 @@ const gmail = google.gmail({ version: "v1", auth: oAuth2Client });
 async function getLatestCode() {
     console.log("📩 Checking Gmail for 2FA code...");
 
-    const { google } = require("googleapis");
+// Wait 35 seconds for email
+await new Promise(resolve => setTimeout(resolve, 35000));
 
-    const oAuth2Client = new google.auth.OAuth2(
-        process.env.GMAIL_CLIENT_ID,
-        process.env.GMAIL_CLIENT_SECRET
-    );
+const res = await gmail.users.messages.list({
+    userId: "me",
+    maxResults: 5
+});
 
-    oAuth2Client.setCredentials({
-        refresh_token: process.env.GMAIL_REFRESH_TOKEN,
+if (!res.data.messages || res.data.messages.length === 0) {
+    throw new Error("No recent emails found.");
+}
+
+let otpCode = null;
+
+for (const msg of res.data.messages) {
+
+    const email = await gmail.users.messages.get({
+        userId: "me",
+        id: msg.id,
+        format: "full"
     });
 
-    const gmail = google.gmail({ version: "v1", auth: oAuth2Client });
+    const headers = email.data.payload.headers;
+    const subjectHeader = headers.find(h => h.name === "Subject");
 
-    try {
-        console.log("⏳ Waiting 20 seconds for OTP email...");
-        await new Promise(resolve => setTimeout(resolve, 20000));
+    if (!subjectHeader || !subjectHeader.value.includes("Verification")) {
+        continue;
+    }
 
-        const res = await gmail.users.messages.list({
-            userId: "me",
-            maxResults: 10,
-            q: "newer_than:5m from:no-reply@sarvinarck.com"
-        });
+    let body = "";
 
-        if (!res.data.messages) {
-            console.log("❌ No recent emails found.");
-            return null;
+    if (email.data.payload.parts) {
+        for (const part of email.data.payload.parts) {
+            if (part.mimeType === "text/html" || part.mimeType === "text/plain") {
+                body = Buffer.from(part.body.data, "base64").toString("utf8");
+                break;
+            }
         }
+    } else if (email.data.payload.body.data) {
+        body = Buffer.from(email.data.payload.body.data, "base64").toString("utf8");
+    }
 
-        for (const msg of res.data.messages) {
-            const email = await gmail.users.messages.get({
-                userId: "me",
-                id: msg.id,
-            });
+    const match = body.match(/\b\d{6}\b/);
+    if (match) {
+        otpCode = match[0];
+        break;
+    }
+}
 
-            const parts = email.data.payload.parts || [];
-            let fullBody = "";
+if (!otpCode) {
+    throw new Error("2FA code not found");
+}
 
-            for (const part of parts) {
-                if (part.body && part.body.data) {
-                    const decoded = Buffer.from(part.body.data, "base64").toString("utf-8");
-                    fullBody += decoded;
-                }
-            }
+console.log("✅ 2FA Code Found:", otpCode);
 
-            if (!fullBody && email.data.payload.body.data) {
-                fullBody = Buffer.from(
-                    email.data.payload.body.data,
-                    "base64"
-                ).toString("utf-8");
-            }
-
-            const match = fullBody.match(/\b\d{6}\b/);
-
-            if (match) {
-                console.log("✅ 2FA Code Found:", match[0]);
                 return match[0];
             }
         }
