@@ -1,3 +1,5 @@
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
 const puppeteer = require('puppeteer');
 const imap = require('imap-simple');
 const { simpleParser } = require('mailparser');
@@ -12,30 +14,28 @@ const CONFIG = {
 };
 
 /* ---------------------------------------------------
-   Get Latest 2FA Code from Gmail
+   GET LATEST 2FA CODE FROM GMAIL
 --------------------------------------------------- */
 async function getLatestCode() {
     const imapConfig = {
-    imap: {
-        user: CONFIG.gmailUser,
-        password: CONFIG.gmailPass,
-        host: 'imap.gmail.com',
-        port: 993,
-        tls: true,
-        tlsOptions: { rejectUnauthorized: false },  // 🔥 FIX
-        authTimeout: 10000
-    }
-};
+        imap: {
+            user: CONFIG.gmailUser,
+            password: CONFIG.gmailPass,
+            host: 'imap.gmail.com',
+            port: 993,
+            tls: true,
+            authTimeout: 10000
+        }
+    };
 
     try {
         const connection = await imap.connect(imapConfig);
         await connection.openBox('INBOX');
 
-        const delay = 3 * 60 * 1000; // Check emails from last 3 minutes
+        const delay = 3 * 60 * 1000;
         const searchCriteria = [['SINCE', new Date(Date.now() - delay)]];
         const fetchOptions = { bodies: ['TEXT'], markSeen: false };
 
-        // Try for max 30 seconds (6 attempts × 5s)
         for (let i = 0; i < 6; i++) {
             const messages = await connection.search(searchCriteria, fetchOptions);
 
@@ -68,7 +68,7 @@ async function getLatestCode() {
 }
 
 /* ---------------------------------------------------
-   Main Bot Logic
+   MAIN BOT LOGIC
 --------------------------------------------------- */
 async function runBot() {
     console.log("🤖 Core Bot Started");
@@ -89,11 +89,9 @@ async function runBot() {
         });
 
         const page = await browser.newPage();
-
         page.setDefaultNavigationTimeout(60000);
         page.setDefaultTimeout(60000);
 
-        // Block heavy resources to save memory
         await page.setRequestInterception(true);
         page.on('request', (req) => {
             if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
@@ -102,8 +100,6 @@ async function runBot() {
                 req.continue();
             }
         });
-
-        /* ---------------- LOGIN ---------------- */
 
         await page.goto('https://app.sarvinarck.com/sign-in', {
             waitUntil: 'domcontentloaded'
@@ -116,8 +112,6 @@ async function runBot() {
         await page.type('input[name="password"]', CONFIG.password, { delay: 20 });
 
         await page.keyboard.press('Enter');
-
-        /* ---------------- 2FA ---------------- */
 
         await page.waitForSelector('input[name="code"]', {
             visible: true,
@@ -135,8 +129,6 @@ async function runBot() {
             { timeout: 60000 }
         );
 
-        /* ---------------- GET TOKEN ---------------- */
-
         let foundToken = null;
 
         for (let i = 0; i < 10; i++) {
@@ -152,8 +144,6 @@ async function runBot() {
         }
 
         if (!foundToken) throw new Error("apiToken not found");
-
-        /* ---------------- SEND TO SUPABASE ---------------- */
 
         await axios.post(
             CONFIG.supabaseUrl,
