@@ -2,7 +2,7 @@ name: Sarvinarck Token Bot
 
 on:
   schedule:
-    - cron: "0 */4 * * *"   # Every 4 hours
+    - cron: "0 */4 * * *"
   workflow_dispatch:
 
 jobs:
@@ -18,7 +18,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
 
       - name: Install Dependencies
         run: npm install
@@ -49,7 +48,6 @@ jobs:
           SARVINARCK_EMAIL: ${{ secrets.SARVINARCK_EMAIL }}
           SARVINARCK_PASSWORD: ${{ secrets.SARVINARCK_PASSWORD }}
           SUPABASE_FUNCTION_URL: ${{ secrets.SUPABASE_FUNCTION_URL }}
-
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
           GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
