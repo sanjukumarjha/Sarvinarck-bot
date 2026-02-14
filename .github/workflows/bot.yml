@@ -2,8 +2,8 @@ name: Sarvinarck Token Bot
 
 on:
   schedule:
-    - cron: "0 */4 * * *"   # Every 4 hours
-  workflow_dispatch:        # Allows manual run
+    - cron: "0 */4 * * *"
+  workflow_dispatch:
 
 jobs:
   run-bot:
