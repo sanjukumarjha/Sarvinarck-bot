@@ -11,6 +11,9 @@ const CONFIG = {
     supabaseUrl: process.env.SUPABASE_FUNCTION_URL
 };
 
+/* ---------------------------------------------------
+   Get Latest 2FA Code from Gmail
+--------------------------------------------------- */
 async function getLatestCode() {
     const imapConfig = {
         imap: {
@@ -19,20 +22,20 @@ async function getLatestCode() {
             host: 'imap.gmail.com',
             port: 993,
             tls: true,
-            tlsOptions: { rejectUnauthorized: false },
-            authTimeout: 15000
+            authTimeout: 10000
         }
     };
 
     try {
         const connection = await imap.connect(imapConfig);
-        await connection.openBox('[Gmail]/All Mail');
+        await connection.openBox('INBOX');
 
-        const delay = 5 * 60 * 1000;
+        const delay = 3 * 60 * 1000; // Check emails from last 3 minutes
         const searchCriteria = [['SINCE', new Date(Date.now() - delay)]];
         const fetchOptions = { bodies: ['TEXT'], markSeen: false };
 
-        for (let i = 0; i < 12; i++) {
+        // Try for max 30 seconds (6 attempts × 5s)
+        for (let i = 0; i < 6; i++) {
             const messages = await connection.search(searchCriteria, fetchOptions);
 
             if (messages.length > 0) {
@@ -44,25 +47,31 @@ async function getLatestCode() {
 
                     const codeMatch = parsed.text?.match(/\b\d{6}\b/);
                     if (codeMatch) {
-                        connection.end();
+                        await connection.end();
+                        console.log("✅ 2FA Code Found");
                         return codeMatch[0];
                     }
                 }
             }
+
             await new Promise(r => setTimeout(r, 5000));
         }
 
-        connection.end();
+        await connection.end();
         return null;
 
     } catch (err) {
-        console.error("Gmail Error:", err.message);
+        console.error("❌ Gmail Error:", err.message);
         return null;
     }
 }
 
+/* ---------------------------------------------------
+   Main Bot Logic
+--------------------------------------------------- */
 async function runBot() {
-    console.log("🤖 Core Bot Logic Started");
+    console.log("🤖 Core Bot Started");
+
     let browser;
 
     try {
@@ -73,17 +82,17 @@ async function runBot() {
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
                 '--no-zygote',
-                '--renderer-process-limit=1',
-                '--disable-extensions'
+                '--single-process'
             ],
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-            headless: 'new'
+            headless: true
         });
 
         const page = await browser.newPage();
-        page.setDefaultNavigationTimeout(90000);
-        page.setDefaultTimeout(90000);
 
+        page.setDefaultNavigationTimeout(60000);
+        page.setDefaultTimeout(60000);
+
+        // Block heavy resources to save memory
         await page.setRequestInterception(true);
         page.on('request', (req) => {
             if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
@@ -93,22 +102,31 @@ async function runBot() {
             }
         });
 
-        await page.goto('https://app.sarvinarck.com/sign-in', { waitUntil: 'domcontentloaded' });
+        /* ---------------- LOGIN ---------------- */
+
+        await page.goto('https://app.sarvinarck.com/sign-in', {
+            waitUntil: 'domcontentloaded'
+        });
 
         await page.waitForSelector('input[name="loginId"]', { visible: true });
-        await page.type('input[name="loginId"]', CONFIG.email, { delay: 30 });
+        await page.type('input[name="loginId"]', CONFIG.email, { delay: 20 });
 
         await page.waitForSelector('input[name="password"]', { visible: true });
-        await page.type('input[name="password"]', CONFIG.password, { delay: 30 });
+        await page.type('input[name="password"]', CONFIG.password, { delay: 20 });
 
         await page.keyboard.press('Enter');
 
-        await page.waitForSelector('input[name="code"]', { visible: true, timeout: 45000 });
+        /* ---------------- 2FA ---------------- */
+
+        await page.waitForSelector('input[name="code"]', {
+            visible: true,
+            timeout: 45000
+        });
 
         const code = await getLatestCode();
         if (!code) throw new Error("2FA code not found");
 
-        await page.type('input[name="code"]', code, { delay: 80 });
+        await page.type('input[name="code"]', code, { delay: 50 });
         await page.keyboard.press('Enter');
 
         await page.waitForFunction(
@@ -116,8 +134,11 @@ async function runBot() {
             { timeout: 60000 }
         );
 
+        /* ---------------- GET TOKEN ---------------- */
+
         let foundToken = null;
-        for (let i = 0; i < 15; i++) {
+
+        for (let i = 0; i < 10; i++) {
             const cookies = await page.cookies();
             const tokenCookie = cookies.find(c => c.name === 'apiToken');
 
@@ -125,15 +146,21 @@ async function runBot() {
                 foundToken = tokenCookie.value;
                 break;
             }
+
             await new Promise(r => setTimeout(r, 2000));
         }
 
-        if (!foundToken) throw new Error("apiToken not found in cookies");
+        if (!foundToken) throw new Error("apiToken not found");
+
+        /* ---------------- SEND TO SUPABASE ---------------- */
 
         await axios.post(
             CONFIG.supabaseUrl,
             { access_token: foundToken },
-            { headers: { 'Content-Type': 'application/json' }, timeout: 20000 }
+            {
+                headers: { 'Content-Type': 'application/json' },
+                timeout: 15000
+            }
         );
 
         console.log("✅ Token synced successfully");
@@ -141,8 +168,10 @@ async function runBot() {
     } catch (err) {
         console.error("❌ Core Bot Error:", err.message);
     } finally {
-        if (browser) await browser.close();
-        console.log("🤖 Core Bot finished");
+        if (browser) {
+            await browser.close();
+        }
+        console.log("🤖 Core Bot Finished");
     }
 }
 
