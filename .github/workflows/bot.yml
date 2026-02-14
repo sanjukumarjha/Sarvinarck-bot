@@ -1,0 +1,52 @@
+name: Sarvinarck Token Bot
+
+on:
+  schedule:
+    - cron: "0 */4 * * *"   # Every 4 hours
+  workflow_dispatch:        # Allows manual run
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Install Chromium Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            fonts-liberation \
+            libappindicator3-1 \
+            libasound2 \
+            libatk-bridge2.0-0 \
+            libatk1.0-0 \
+            libcups2 \
+            libdbus-1-3 \
+            libgdk-pixbuf2.0-0 \
+            libnspr4 \
+            libnss3 \
+            libxcomposite1 \
+            libxdamage1 \
+            libxrandr2 \
+            xdg-utils \
+            libgbm-dev
+
+      - name: Run Bot
+        run: node bot.js
+        env:
+          SARVINARCK_EMAIL: ${{ secrets.SARVINARCK_EMAIL }}
+          SARVINARCK_PASSWORD: ${{ secrets.SARVINARCK_PASSWORD }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          SUPABASE_FUNCTION_URL: ${{ secrets.SUPABASE_FUNCTION_URL }}
